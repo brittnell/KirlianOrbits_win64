@@ -33,9 +33,9 @@ This isn't an original idea, by the way. Circular sequencers date back to Raymon
 
 TL;DR: You can use, share, copy, modify, and integrate this sequencer freely with 2 exceptions:
 
-• Attribution - Just gimme props bruh
+**• Attribution** - Just gimme props bruh
 
-• Non-Commercial - If I get Instagram ads trying to selling this to people for $9.99 a month, we're going to have a fucking problem. 
+**• Non-Commercial** - If I get Instagram ads trying to sell this to people for $9.99 a month, we're going to have a fucking problem. 
 
 ## How to run w/ Python
 
