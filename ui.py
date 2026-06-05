@@ -66,6 +66,10 @@ class Button:
 
 
 class Slider:
+    # Only one slider may be in manual text-entry mode at a time (across the
+    # whole app — sidebar sliders and the top-bar BPM slider share this).
+    active_editor = None
+
     def __init__(self, x, y, w, h, min_val, max_val, current_val, label, unit="", integer_only=False, callback=None):
         self.rect = pygame.Rect(x, y, w, h)
         self.min_val = min_val
@@ -75,10 +79,46 @@ class Slider:
         self.unit = unit
         self.integer_only = integer_only
         self.callback = callback
-        
+
         self.is_dragging = False
         self.handle_r = 8
+
+        # Manual value-entry (double-click the readout to type a value)
+        self.is_editing = False
+        self.edit_text = ""
+        self.value_rect = pygame.Rect(0, 0, 0, 0)   # readout hit-area, set in draw()
+        self.last_value_click = 0                    # ms timestamp for double-click detection
+
         self.update_handle_x()
+
+    def begin_edit(self):
+        """Enter manual text-entry mode, pre-filled with the current value."""
+        if Slider.active_editor is not None and Slider.active_editor is not self:
+            Slider.active_editor.commit_edit()
+        self.is_editing = True
+        if self.integer_only:
+            self.edit_text = str(int(round(self.current_val)))
+        else:
+            self.edit_text = f"{self.current_val:.2f}".rstrip('0').rstrip('.')
+        Slider.active_editor = self
+
+    def commit_edit(self):
+        """Parse the typed text and apply it (clamped); keep old value if invalid."""
+        if not self.is_editing:
+            return
+        self.is_editing = False
+        if Slider.active_editor is self:
+            Slider.active_editor = None
+        try:
+            self.set_value(float(self.edit_text.strip()))
+        except ValueError:
+            pass
+
+    def cancel_edit(self):
+        """Leave text-entry mode without applying the typed value."""
+        self.is_editing = False
+        if Slider.active_editor is self:
+            Slider.active_editor = None
 
     def update_handle_x(self):
         val_range = self.max_val - self.min_val
@@ -97,24 +137,54 @@ class Slider:
             self.callback(self.current_val)
 
     def handle_event(self, event):
+        # --- Manual text-entry mode takes priority -------------------------
+        if self.is_editing:
+            if event.type == pygame.KEYDOWN:
+                if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    self.commit_edit()
+                elif event.key == pygame.K_ESCAPE:
+                    self.cancel_edit()
+                elif event.key == pygame.K_BACKSPACE:
+                    self.edit_text = self.edit_text[:-1]
+                elif event.unicode and event.unicode in "0123456789.-":
+                    self.edit_text += event.unicode
+                return True  # swallow ALL keystrokes so global hotkeys don't fire
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if self.value_rect.collidepoint(event.pos):
+                    return True          # clicking inside the field keeps editing
+                self.commit_edit()       # clicking elsewhere commits...
+                return False             # ...and lets that click act normally
+            return False
+
+        # --- Normal mode ---------------------------------------------------
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             mouse_pos = event.pos
+            # Double-click the value readout to type a value manually
+            if self.value_rect.collidepoint(mouse_pos):
+                now = pygame.time.get_ticks()
+                if now - self.last_value_click <= 400:
+                    self.last_value_click = 0
+                    self.begin_edit()
+                else:
+                    self.last_value_click = now
+                return True
+
             expanded_rect = self.rect.inflate(0, 10)
             if expanded_rect.collidepoint(mouse_pos):
                 self.is_dragging = True
                 self.update_val_from_mouse(mouse_pos[0])
                 return True
-                
+
         elif event.type == pygame.MOUSEMOTION:
             if self.is_dragging:
                 self.update_val_from_mouse(event.pos[0])
                 return True
-                
+
         elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
             if self.is_dragging:
                 self.is_dragging = False
                 return True
-                
+
         return False
 
     def update_val_from_mouse(self, mouse_x):
@@ -134,10 +204,36 @@ class Slider:
             val_str = f"{midi_to_name(self.current_val)} ({self.current_val})"
         elif self.label == "Orbit Sync Divisor":
             val_str = f"/{int(self.current_val)}"
-            
+
         val_surf = fm.render(f"{val_str} {self.unit}".strip(), 'small', COLOR_TEXT)
-        surface.blit(val_surf, (self.rect.x + self.rect.width - val_surf.get_width(), self.rect.y - 20))
-        
+
+        if self.is_editing:
+            # Manual entry field — keep the number at the SAME right edge and vertical
+            # centre as the normal readout; just frame it in a box with a caret.
+            txt_surf = fm.render(self.edit_text, 'small', COLOR_WHITE)
+            val_h = val_surf.get_height()
+            val_cy = (self.rect.y - 20) + val_h // 2          # readout's vertical centre
+            right = self.rect.x + self.rect.width             # readout's right edge
+            txt_x = right - txt_surf.get_width()              # right-aligned, unchanged position
+
+            box_h = val_h + 6
+            box_right = right + 10
+            box_left = min(txt_x - 8, box_right - 58)         # enforce a sensible min width
+            box = pygame.Rect(box_left, val_cy - box_h // 2, box_right - box_left, box_h)
+            pygame.draw.rect(surface, (38, 40, 56), box, border_radius=3)
+            pygame.draw.rect(surface, COLOR_PRIMARY, box, width=1, border_radius=3)
+
+            surface.blit(txt_surf, (txt_x, val_cy - txt_surf.get_height() // 2))
+            if (pygame.time.get_ticks() // 500) % 2 == 0:     # blinking caret, fixed position
+                cx = right + 2
+                pygame.draw.line(surface, COLOR_WHITE, (cx, val_cy - val_h // 2 + 1), (cx, val_cy + val_h // 2 - 1), 1)
+            self.value_rect = box
+        else:
+            vx = self.rect.x + self.rect.width - val_surf.get_width()
+            vy = self.rect.y - 20
+            surface.blit(val_surf, (vx, vy))
+            self.value_rect = pygame.Rect(vx - 4, vy - 2, val_surf.get_width() + 8, val_surf.get_height() + 4)
+
         track_y = self.rect.y + self.rect.height // 2
         pygame.draw.line(surface, COLOR_BORDER, (self.rect.x, track_y), (self.rect.x + self.rect.width, track_y), width=4)
         
@@ -324,6 +420,185 @@ class Dropdown:
                                  (opt_rect.x + opt_rect.width, opt_rect.y + self.option_height - 1))
 
 
+class PianoKeySelector:
+    """One-octave clickable piano keyboard + octave stepper for choosing a MIDI note.
+
+    Replaces the single 'Note Pitch' slider. The 12 keys pick the pitch class; the
+    stepper moves the octave. Octave range is configurable (default C0-B8 = MIDI 12-119).
+    """
+
+    WHITE = [0, 2, 4, 5, 7, 9, 11]                      # C D E F G A B (semitone offsets)
+    BLACK = [(1, 0), (3, 1), (6, 3), (8, 4), (10, 5)]   # (semitone, white-slot it follows)
+
+    def __init__(self, x, y, w, label, callback=None, min_octave=0, max_octave=8):
+        self.rect = pygame.Rect(x, y, w, 88)
+        self.label = label
+        self.callback = callback
+        self.min_octave = min_octave
+        self.max_octave = max_octave
+        self.current_val = 60
+        self.is_hovered = False
+        self.hover_semitone = None
+        self.hover_step = None      # 'minus' / 'plus' / None
+
+        # Vertical metrics (relative to rect.y)
+        self.step_h = 22
+        self.key_top = 26
+        self.white_h = 58
+        self.black_h = 38
+
+    # --- value helpers -------------------------------------------------
+    @property
+    def octave(self):
+        return (self.current_val // 12) - 1
+
+    @property
+    def semitone(self):
+        return self.current_val % 12
+
+    def _min_midi(self):
+        return 12 * (self.min_octave + 1)
+
+    def _max_midi(self):
+        return 12 * (self.max_octave + 1) + 11
+
+    def set_value(self, midi):
+        midi = max(self._min_midi(), min(self._max_midi(), int(round(midi))))
+        self.current_val = midi
+        if self.callback:
+            self.callback(self.current_val)
+
+    def _set_octave(self, octv):
+        octv = max(self.min_octave, min(self.max_octave, octv))
+        self.set_value(12 * (octv + 1) + self.semitone)
+
+    def _set_semitone(self, semi):
+        self.set_value(12 * (self.octave + 1) + semi)
+
+    # --- geometry ------------------------------------------------------
+    def _white_w(self):
+        return self.rect.width / 7.0
+
+    def _step_rects(self):
+        x, y = self.rect.x, self.rect.y
+        minus = pygame.Rect(x, y, 24, self.step_h)
+        plus = pygame.Rect(x + 28, y, 24, self.step_h)
+        return minus, plus
+
+    def _white_rects(self):
+        x, y = self.rect.x, self.rect.y + self.key_top
+        ww = self._white_w()
+        rects = []
+        for slot, semi in enumerate(self.WHITE):
+            left = x + round(slot * ww)
+            right = x + round((slot + 1) * ww)
+            rects.append((semi, pygame.Rect(left, y, right - left - 1, self.white_h)))
+        return rects
+
+    def _black_rects(self):
+        x, y = self.rect.x, self.rect.y + self.key_top
+        ww = self._white_w()
+        bw = ww * 0.62
+        rects = []
+        for semi, slot in self.BLACK:
+            cx = x + (slot + 1) * ww
+            rects.append((semi, pygame.Rect(round(cx - bw / 2), y, round(bw), self.black_h)))
+        return rects
+
+    # --- interaction ---------------------------------------------------
+    def check_hover(self, pos):
+        self.is_hovered = self.rect.collidepoint(pos)
+        self.hover_step = None
+        self.hover_semitone = None
+
+        minus, plus = self._step_rects()
+        if minus.collidepoint(pos):
+            self.hover_step = 'minus'
+            return
+        if plus.collidepoint(pos):
+            self.hover_step = 'plus'
+            return
+        # Black keys sit on top of the white keys, so test them first
+        for semi, r in self._black_rects():
+            if r.collidepoint(pos):
+                self.hover_semitone = semi
+                return
+        for semi, r in self._white_rects():
+            if r.collidepoint(pos):
+                self.hover_semitone = semi
+                return
+
+    def handle_event(self, event):
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            pos = event.pos
+            minus, plus = self._step_rects()
+            if minus.collidepoint(pos):
+                self._set_octave(self.octave - 1)
+                return True
+            if plus.collidepoint(pos):
+                self._set_octave(self.octave + 1)
+                return True
+            for semi, r in self._black_rects():     # black keys on top
+                if r.collidepoint(pos):
+                    self._set_semitone(semi)
+                    return True
+            for semi, r in self._white_rects():
+                if r.collidepoint(pos):
+                    self._set_semitone(semi)
+                    return True
+        return False
+
+    # --- drawing -------------------------------------------------------
+    def draw(self, surface, fm):
+        # Section label + current note readout (mirrors the old slider header)
+        lbl = fm.render(self.label, 'small', COLOR_MUTED)
+        surface.blit(lbl, (self.rect.x, self.rect.y - 18))
+        name = fm.render(f"{midi_to_name(self.current_val)} ({self.current_val})", 'small', COLOR_TEXT)
+        surface.blit(name, (self.rect.x + self.rect.width - name.get_width(), self.rect.y - 18))
+
+        # Octave stepper buttons (triangles, matching the dropdown arrow style)
+        minus, plus = self._step_rects()
+        for r, kind in ((minus, 'minus'), (plus, 'plus')):
+            hot = self.hover_step == kind
+            pygame.draw.rect(surface, COLOR_BORDER if hot else COLOR_PANEL, r, border_radius=4)
+            pygame.draw.rect(surface, COLOR_BORDER, r, width=1, border_radius=4)
+            cy = r.centery
+            if kind == 'minus':
+                pts = [(r.right - 8, cy - 5), (r.right - 8, cy + 5), (r.x + 7, cy)]
+            else:
+                pts = [(r.x + 8, cy - 5), (r.x + 8, cy + 5), (r.right - 7, cy)]
+            pygame.draw.polygon(surface, COLOR_PRIMARY, pts)
+
+        oct_txt = fm.render(f"Octave {self.octave}", 'small', COLOR_TEXT)
+        surface.blit(oct_txt, (plus.right + 10, minus.y + (self.step_h - oct_txt.get_height()) // 2))
+
+        # White keys first
+        for semi, r in self._white_rects():
+            if semi == self.semitone:
+                fill = COLOR_PINK
+            elif semi == self.hover_semitone:
+                fill = (226, 228, 236)
+            else:
+                fill = (198, 200, 210)
+            pygame.draw.rect(surface, fill, r, border_radius=3)
+            pygame.draw.rect(surface, COLOR_BORDER, r, width=1, border_radius=3)
+            klbl = fm.render(NOTE_NAMES[semi], 'tiny', (35, 36, 46))
+            surface.blit(klbl, (r.centerx - klbl.get_width() // 2, r.bottom - klbl.get_height() - 5))
+
+        # Black keys on top
+        for semi, r in self._black_rects():
+            if semi == self.semitone:
+                fill, txt_col = COLOR_PINK, (20, 20, 28)
+            elif semi == self.hover_semitone:
+                fill, txt_col = (70, 74, 94), COLOR_TEXT
+            else:
+                fill, txt_col = (22, 24, 34), COLOR_MUTED
+            pygame.draw.rect(surface, fill, r, border_radius=2)
+            pygame.draw.rect(surface, (8, 9, 13), r, width=1, border_radius=2)
+            klbl = fm.render(NOTE_NAMES[semi], 'tiny', txt_col)
+            surface.blit(klbl, (r.centerx - klbl.get_width() // 2, r.bottom - klbl.get_height() - 3))
+
+
 class NoteSidebar:
     def __init__(self, screen_w, screen_h, on_delete_callback):
         self.screen_w = screen_w
@@ -339,6 +614,7 @@ class NoteSidebar:
         
         # 1. Pitch Section
         self.pitch_slider = Slider(20, 0, 240, 20, 24, 108, 60, "Note Pitch", integer_only=True, callback=self.update_note_pitch)
+        self.pitch_keyboard = PianoKeySelector(20, 0, 240, "Note Pitch", callback=self.update_note_pitch, min_octave=0, max_octave=8)
         self.pitch_ranges_checkbox = Checkbox(160, 0, 16, "Ranges", callback=self.toggle_pitch_range)
         self.pitch_min_slider = Slider(20, 0, 240, 20, 24, 108, 48, "Pitch Min", integer_only=True, callback=self.update_pitch_min)
         self.pitch_max_slider = Slider(20, 0, 240, 20, 24, 108, 72, "Pitch Max", integer_only=True, callback=self.update_pitch_max)
@@ -437,6 +713,7 @@ class NoteSidebar:
         if note:
             # Sync normal values
             self.pitch_slider.set_value(note.midi_note)
+            self.pitch_keyboard.set_value(note.midi_note)
             self.velocity_slider.set_value(note.velocity)
             self.gate_slider.set_value(note.gate_length)
             self.channel_slider.set_value(note.midi_channel + 1)
@@ -474,7 +751,7 @@ class NoteSidebar:
         if note.use_pitch_range:
             widgets.extend([self.pitch_min_slider, self.pitch_max_slider, self.key_dropdown, self.scale_dropdown])
         else:
-            widgets.append(self.pitch_slider)
+            widgets.append(self.pitch_keyboard)
             
         # 2. Velocity
         widgets.append(self.vel_ranges_checkbox)
@@ -563,8 +840,11 @@ class NoteSidebar:
             pos = event.pos
             if event.type == pygame.MOUSEBUTTONDOWN:
                 if pos[0] < self.x:
+                    # Click outside the sidebar commits any open value editor
+                    if Slider.active_editor is not None:
+                        Slider.active_editor.commit_edit()
                     return False
-                    
+
             event_shifted = pygame.event.Event(event.type, {**event.dict, 'pos': (pos[0] - self.x, pos[1])})
         else:
             event_shifted = event
@@ -586,10 +866,20 @@ class NoteSidebar:
                     if isinstance(widget, Dropdown) and widget != open_dropdown:
                         widget.is_open = False
                 return True
-                
+
+        # 1b. A slider in manual text-entry mode gets first crack at the event
+        # (so typed keys / commit-clicks reach it before anything else).
+        editor = None
+        for widget in active_widgets:
+            if isinstance(widget, Slider) and widget.is_editing:
+                editor = widget
+                break
+        if editor is not None and editor.handle_event(event_shifted):
+            return True
+
         # 2. Dispatch event to all other active widgets (including closed dropdowns!)
         for widget in active_widgets:
-            if widget != open_dropdown:
+            if widget != open_dropdown and widget is not editor:
                 if hasattr(widget, 'check_hover'):
                     m_pos = pygame.mouse.get_pos()
                     widget.check_hover((m_pos[0] - self.x, m_pos[1]))
@@ -632,9 +922,9 @@ class NoteSidebar:
             self.scale_dropdown.rect.y = y + 130
             y += 165
         else:
-            self.pitch_slider.rect.y = y + 15
-            y += 45
-            
+            self.pitch_keyboard.rect.y = y + 28
+            y += 120
+
         # B. Velocity Section
         y += 10
         self.vel_ranges_checkbox.rect.y = y
@@ -728,15 +1018,49 @@ def get_curved_line_points(center, r, base_angle, bend_amount):
     return points
 
 
+# Spectrum colour stops spanning the selectable pitch range (C0..B8 = MIDI 12..119):
+# deep purple (lowest) -> blue -> green (middle) -> yellow -> orange -> fuchsia (highest)
+PITCH_SPECTRUM = [
+    (0.00, (96, 40, 170)),    # deep purple
+    (0.20, (45, 95, 230)),    # blue
+    (0.45, (60, 220, 130)),   # green
+    (0.65, (240, 225, 70)),   # yellow
+    (0.82, (255, 150, 45)),   # orange
+    (1.00, (255, 60, 200)),   # fuchsia
+]
+
+def pitch_to_color(midi_note, lo=12, hi=119):
+    """Map a MIDI pitch to a colour along the PITCH_SPECTRUM gradient."""
+    t = (midi_note - lo) / float(hi - lo) if hi != lo else 0.0
+    t = max(0.0, min(1.0, t))
+    for i in range(len(PITCH_SPECTRUM) - 1):
+        t0, c0 = PITCH_SPECTRUM[i]
+        t1, c1 = PITCH_SPECTRUM[i + 1]
+        if t <= t1:
+            f = 0.0 if t1 == t0 else (t - t0) / (t1 - t0)
+            return tuple(int(c0[j] + (c1[j] - c0[j]) * f) for j in range(3))
+    return PITCH_SPECTRUM[-1][1]
+
+
+def _note_spectrum_color(note):
+    """The spectrum colour for a note (range mode uses the pitch-window midpoint)."""
+    base_pitch = note.midi_note
+    if getattr(note, 'use_pitch_range', False):
+        base_pitch = (note.pitch_min + note.pitch_max) // 2
+    return pitch_to_color(base_pitch)
+
+
 def draw_clock_board(surface, center, r, is_spinning, angle, handles_list, notes, selected_note, fm):
     """Draws the concentric orbit paths, Bezier control polygon, smooth Cubic Bezier curve, and orbiting notes."""
     x_c, y_c = center
     
-    # 1. Thin concentric ORBITAL PATHS (highly faint coronal tracks)
+    # 1. Thin concentric ORBITAL PATHS — tinted to each note's pitch colour,
+    #    very low opacity (~12%) so they don't compete with the notes themselves.
     for note in notes:
         visual_r = note.norm_r * r
-        # Faint blue/gray electric pathway
-        pygame.draw.circle(surface, (32, 34, 46), center, int(visual_r), width=1)
+        nc = _note_spectrum_color(note)
+        ring_color = tuple(int(COLOR_BG[c] + (nc[c] - COLOR_BG[c]) * 0.12) for c in range(3))
+        pygame.draw.circle(surface, ring_color, center, int(visual_r), width=1)
 
     # 2. Glowing outer clock ring
     glow_surf = pygame.Surface((r * 2 + 20, r * 2 + 20), pygame.SRCALPHA)
@@ -798,11 +1122,19 @@ def draw_clock_board(surface, center, r, is_spinning, angle, handles_list, notes
         nx = x_c + visual_r * math.sin(note.polar_angle)
         ny = y_c - visual_r * math.cos(note.polar_angle)
         
-        radius = note.radius
-        
+        note_color = _note_spectrum_color(note)
+
+        # Trigger scaling animation: rest at half size, pop to full size on a hit,
+        # then ease back down as the flash decays (smoothstep for a soft settle).
+        full_r = note.radius
+        base_r = full_r * 0.5
+        f = note.flash_intensity
+        eased = f * f * (3.0 - 2.0 * f)            # smoothstep over the flash decay
+        radius = max(1, int(round(base_r + (full_r - base_r) * eased)))
+
         # KIRLIAN AESTHETIC: Multi-layered electric coronal discharge rings!
-        # Draws concentric layers with varying opacity of emerald-green/cyan to simulate electrical discharge aura
-        glow_base = COLOR_EMERALD
+        # Concentric layers with varying opacity of the note's spectrum colour.
+        glow_base = note_color
         for layer in range(5, 0, -1):
             # Scale out the glowing radius, making it expand even more during a trigger flash!
             layer_r = radius + (layer * 3) + int(note.flash_intensity * 8)
@@ -813,15 +1145,16 @@ def draw_clock_board(surface, center, r, is_spinning, angle, handles_list, notes
             pygame.draw.circle(layer_surf, (*glow_base, alpha), (layer_r + 5, layer_r + 5), layer_r, width=1)
             surface.blit(layer_surf, (nx - layer_r - 5, ny - layer_r - 5))
             
-        # Blended fill transitions (notes change color slightly when hit)
+        # Blended fill transitions (notes brighten toward their colour when hit)
         fill_color = tuple(
-            int(COLOR_BG[c] + (COLOR_EMERALD[c] - COLOR_BG[c]) * note.flash_intensity * 0.38)
+            int(COLOR_BG[c] + (note_color[c] - COLOR_BG[c]) * note.flash_intensity * 0.38)
             for c in range(3)
         )
-        
-        border_color = COLOR_EMERALD
-        text_color = COLOR_EMERALD
-        
+
+        border_color = note_color
+        # Lighten the label slightly so low (purple/blue) notes stay legible
+        text_color = tuple(min(255, int(note_color[c] + (255 - note_color[c]) * 0.25)) for c in range(3))
+
         if note.flash_intensity > 0:
             border_color = tuple(min(255, int(border_color[c] + (255 - border_color[c]) * note.flash_intensity * 0.5)) for c in range(3))
             text_color = COLOR_WHITE

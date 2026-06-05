@@ -350,6 +350,7 @@ def main():
                     
                     if dragged_note == selected_note:
                         sidebar.pitch_slider.set_value(dragged_note.midi_note)
+                        sidebar.pitch_keyboard.set_value(dragged_note.midi_note)
                         
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                 dragged_note = None
