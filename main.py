@@ -11,7 +11,7 @@ from midi_manager import MidiManager
 from sequencer import Sequencer
 from ui import (
     FontManager, Button, Slider, Dropdown, NoteSidebar, draw_clock_board,
-    COLOR_BG, COLOR_PRIMARY, COLOR_PINK, COLOR_TEXT, COLOR_MUTED, COLOR_EMERALD, COLOR_RED, COLOR_WHITE
+    COLOR_BG, COLOR_PRIMARY, COLOR_PINK, COLOR_TEXT, COLOR_MUTED, COLOR_EMERALD, COLOR_RED, COLOR_WHITE, COLOR_BORDER, COLOR_ORANGE
 )
 
 # Initial screen dimensions
@@ -73,13 +73,13 @@ def main():
             sequencer.stop()
             midi_manager.panic()
             play_btn.text = "PLAY"
-            play_btn.color = (50, 200, 100)
-            play_btn.hover_color = (100, 230, 150)
+            play_btn.color = COLOR_EMERALD
+            play_btn.hover_color = (130, 255, 160)
         else:
             sequencer.start()
             play_btn.text = "PAUSE"
-            play_btn.color = (255, 140, 0)
-            play_btn.hover_color = (255, 180, 50)
+            play_btn.color = COLOR_ORANGE
+            play_btn.hover_color = (255, 205, 150)
             
     def clear_sequencer():
         nonlocal selected_note
@@ -91,28 +91,17 @@ def main():
     def change_bpm(val):
         sequencer.set_bpm(int(val))
         
-    def toggle_line_spin():
-        sequencer.is_line_spinning = not sequencer.is_line_spinning
-        if sequencer.is_line_spinning:
-            spin_btn.text = "SPIN: ON"
-            spin_btn.color = COLOR_PRIMARY
-            spin_btn.hover_color = (200, 170, 255)
-        else:
-            spin_btn.text = "SPIN: OFF"
-            spin_btn.color = COLOR_MUTED
-            spin_btn.hover_color = (160, 170, 180)
-            sequencer.sweep_angle = 0.0
-            
-    def toggle_spin_direction():
+    def change_spin(val):
+        sequencer.spin_speed = float(val)
+
+    def toggle_reverse():
         sequencer.line_spin_direction = -1 if sequencer.line_spin_direction == 1 else 1
-        if sequencer.line_spin_direction == 1:
-            dir_btn.text = "DIR: CW"
-            dir_btn.color = COLOR_MUTED
-            dir_btn.hover_color = (160, 170, 180)
+        if sequencer.line_spin_direction == -1:
+            rev_btn.color = COLOR_PINK
+            rev_btn.hover_color = (255, 180, 220)
         else:
-            dir_btn.text = "DIR: CCW"
-            dir_btn.color = COLOR_PINK
-            dir_btn.hover_color = (255, 180, 220)
+            rev_btn.color = COLOR_MUTED
+            rev_btn.hover_color = (160, 170, 180)
             
     def save_session_dialog():
         import tkinter as tk
@@ -149,12 +138,13 @@ def main():
                 sidebar.set_note(None)
                 sequencer.load_from_json(file_path)
                 bpm_slider.set_value(sequencer.bpm)
-                if sequencer.line_spin_direction == 1:
-                    dir_btn.text = "DIR: CW"
-                    dir_btn.color = COLOR_MUTED
+                spin_slider.set_value(sequencer.spin_speed)
+                if sequencer.line_spin_direction == -1:
+                    rev_btn.color = COLOR_PINK
+                    rev_btn.hover_color = (255, 180, 220)
                 else:
-                    dir_btn.text = "DIR: CCW"
-                    dir_btn.color = COLOR_PINK
+                    rev_btn.color = COLOR_MUTED
+                    rev_btn.hover_color = (160, 170, 180)
                 midi_manager.status_message = "Session Loaded Successfully"
             except Exception as e:
                 midi_manager.status_message = f"Load Error: {str(e)[:25]}"
@@ -180,24 +170,24 @@ def main():
     save_btn = Button(195, 15, 55, 28, "SAVE", COLOR_MUTED, (70, 75, 100), save_session_dialog)
     load_btn = Button(255, 15, 55, 28, "LOAD", COLOR_MUTED, (70, 75, 100), load_session_dialog)
     
-    play_btn = Button(20, 60, 55, 28, "PAUSE" if sequencer.is_playing else "PLAY", 
-                      (50, 200, 100) if not sequencer.is_playing else (255, 140, 0),
-                      (100, 230, 150) if not sequencer.is_playing else (255, 180, 50),
-                      toggle_play)
+    play_btn = Button(20, 60, 55, 28, "PAUSE" if sequencer.is_playing else "PLAY",
+                      COLOR_EMERALD if not sequencer.is_playing else COLOR_ORANGE,
+                      (130, 255, 160) if not sequencer.is_playing else (255, 205, 150),
+                      toggle_play, text_color=(12, 16, 22))
                       
     clear_btn = Button(80, 60, 55, 28, "CLEAR", (150, 50, 50), (200, 80, 80), clear_sequencer)
     
     reset_btn = Button(140, 60, 55, 28, "RESET", COLOR_MUTED, (160, 170, 180), reset_orbits_and_sweep)
     
-    bpm_slider = Slider(205, 65, 75, 18, 1, 1000, sequencer.bpm, "BPM", integer_only=True, callback=change_bpm)
-    
-    spin_btn = Button(290, 60, 65, 28, "SPIN: OFF", COLOR_MUTED, (160, 170, 180), toggle_line_spin)
-    
-    dir_btn = Button(360, 60, 55, 28, "DIR: CW", COLOR_MUTED, (160, 170, 180), toggle_spin_direction)
-    
-    straight_btn = Button(420, 60, 55, 28, "STRT", COLOR_MUTED, (160, 170, 180), straighten_spline_handles)
-    
-    top_bar_widgets = [play_btn, clear_btn, reset_btn, bpm_slider, spin_btn, dir_btn, straight_btn, save_btn, load_btn, midi_dropdown]
+    bpm_slider = Slider(205, 65, 70, 18, 1, 1000, sequencer.bpm, "BPM", integer_only=True, callback=change_bpm)
+
+    spin_slider = Slider(295, 65, 60, 18, 0, 100, sequencer.spin_speed, "Spin", integer_only=True, callback=change_spin)
+
+    rev_btn = Button(365, 60, 55, 28, "REV", COLOR_MUTED, (160, 170, 180), toggle_reverse)
+
+    straight_btn = Button(425, 60, 50, 28, "STRT", COLOR_MUTED, (160, 170, 180), straighten_spline_handles)
+
+    top_bar_widgets = [play_btn, clear_btn, reset_btn, bpm_slider, spin_slider, rev_btn, straight_btn, save_btn, load_btn, midi_dropdown]
     
     # Primary application loop
     running = True
@@ -256,16 +246,13 @@ def main():
                     clicked_handle = None
                     
                     h1, h2, h3 = sequencer.handles
-                    if sequencer.is_line_spinning:
-                        ang = sequencer.sweep_angle
-                        cos_a = math.cos(ang)
-                        sin_a = math.sin(ang)
-                        p1 = (h1[0] * cos_a - h1[1] * sin_a, h1[0] * sin_a + h1[1] * cos_a)
-                        p2 = (h2[0] * cos_a - h2[1] * sin_a, h2[0] * sin_a + h2[1] * cos_a)
-                        p3 = (h3[0] * cos_a - h3[1] * sin_a, h3[0] * sin_a + h3[1] * cos_a)
-                    else:
-                        p1, p2, p3 = h1, h2, h3
-                        
+                    ang = sequencer.sweep_angle
+                    cos_a = math.cos(ang)
+                    sin_a = math.sin(ang)
+                    p1 = (h1[0] * cos_a - h1[1] * sin_a, h1[0] * sin_a + h1[1] * cos_a)
+                    p2 = (h2[0] * cos_a - h2[1] * sin_a, h2[0] * sin_a + h2[1] * cos_a)
+                    p3 = (h3[0] * cos_a - h3[1] * sin_a, h3[0] * sin_a + h3[1] * cos_a)
+
                     ap1 = (CLOCK_CENTER[0] + p1[0], CLOCK_CENTER[1] + p1[1])
                     ap2 = (CLOCK_CENTER[0] + p2[0], CLOCK_CENTER[1] + p2[1])
                     ap3 = (CLOCK_CENTER[0] + p3[0], CLOCK_CENTER[1] + p3[1])
@@ -325,16 +312,12 @@ def main():
                         rx = (rx / dist) * CLOCK_RADIUS
                         ry = (ry / dist) * CLOCK_RADIUS
                         
-                    if sequencer.is_line_spinning:
-                        ang = -sequencer.sweep_angle
-                        cos_a = math.cos(ang)
-                        sin_a = math.sin(ang)
-                        rx_base = rx * cos_a - ry * sin_a
-                        ry_base = rx * sin_a + ry * cos_a
-                    else:
-                        rx_base = rx
-                        ry_base = ry
-                        
+                    ang = -sequencer.sweep_angle
+                    cos_a = math.cos(ang)
+                    sin_a = math.sin(ang)
+                    rx_base = rx * cos_a - ry * sin_a
+                    ry_base = rx * sin_a + ry * cos_a
+
                     sequencer.handles[dragged_handle_idx] = [rx_base, ry_base]
                     
                 # II. Handle Orbiting Note Dragging
@@ -410,8 +393,8 @@ def main():
         
         # A. Draw the clock board, tracks, control polygon, electric Bezier sweep arm, handles, and orbiting notes
         draw_clock_board(
-            screen, CLOCK_CENTER, CLOCK_RADIUS, 
-            sequencer.is_line_spinning, sequencer.sweep_angle, sequencer.handles,
+            screen, CLOCK_CENTER, CLOCK_RADIUS,
+            sequencer.sweep_angle, sequencer.handles,
             sequencer.notes, selected_note, fm
         )
         

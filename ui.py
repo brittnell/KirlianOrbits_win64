@@ -2,18 +2,19 @@ import pygame
 import math
 from sequencer import NOTE_NAMES, midi_to_name
 
-# Colors (Electrical Kirlian Aura Palette)
-COLOR_BG = (10, 11, 16)         # Deep Obsidian space
-COLOR_PANEL = (22, 23, 31)      # Glassmorphic Slate Drawer
-COLOR_BORDER = (45, 48, 65)     # Glowing Panel Border
-COLOR_TEXT = (248, 248, 242)    # Spark White
-COLOR_MUTED = (139, 148, 158)   # Faint Corona Gray
-COLOR_PRIMARY = (189, 147, 249) # Coronal Violet / Accent Purple
-COLOR_PINK = (255, 121, 198)    # Neon Coronal Pink
-COLOR_EMERALD = (80, 250, 123)  # Electric Cyan/Green Note Aura
-COLOR_RED = (255, 85, 85)       # High-Voltage Ruby
-COLOR_ORANGE = (255, 184, 108)  # Spark Amber
+# Colors (Electric Blue Kirlian palette — dark base, blue as signal)
+COLOR_BG = (8, 10, 14)          # Deep obsidian space (cool near-black)
+COLOR_PANEL = (18, 22, 30)      # Slate drawer / panel fill
+COLOR_BORDER = (38, 50, 70)     # Blue-gray panel border
+COLOR_TEXT = (236, 244, 250)    # Cool spark white
+COLOR_MUTED = (128, 142, 160)   # Faint corona gray (dim labels)
+COLOR_PRIMARY = (56, 189, 248)  # Sky-cyan accent (#38BDF8) — interactive elements
+COLOR_PINK = (255, 121, 198)    # Complementary highlight (selection / active)
+COLOR_EMERALD = (80, 250, 123)  # Status green (active / note sent)
+COLOR_RED = (255, 85, 85)       # High-voltage ruby (stop / errors)
+COLOR_ORANGE = (255, 184, 108)  # Spark amber
 COLOR_WHITE = (255, 255, 255)
+COLOR_RING = (0, 170, 255)      # Outer clock ring + sweep arm (electric blue #00aaff)
 
 class FontManager:
     def __init__(self):
@@ -200,7 +201,7 @@ class Slider:
         surface.blit(lbl_surf, (self.rect.x, self.rect.y - 20))
         
         val_str = f"{self.current_val}" if self.integer_only else f"{self.current_val:.2f}"
-        if self.label == "Note Pitch":
+        if self.label in ("Note Pitch", "Pitch Min", "Pitch Max"):
             val_str = f"{midi_to_name(self.current_val)} ({self.current_val})"
         elif self.label == "Orbit Sync Divisor":
             val_str = f"/{int(self.current_val)}"
@@ -616,8 +617,8 @@ class NoteSidebar:
         self.pitch_slider = Slider(20, 0, 240, 20, 24, 108, 60, "Note Pitch", integer_only=True, callback=self.update_note_pitch)
         self.pitch_keyboard = PianoKeySelector(20, 0, 240, "Note Pitch", callback=self.update_note_pitch, min_octave=0, max_octave=8)
         self.pitch_ranges_checkbox = Checkbox(160, 0, 16, "Ranges", callback=self.toggle_pitch_range)
-        self.pitch_min_slider = Slider(20, 0, 240, 20, 24, 108, 48, "Pitch Min", integer_only=True, callback=self.update_pitch_min)
-        self.pitch_max_slider = Slider(20, 0, 240, 20, 24, 108, 72, "Pitch Max", integer_only=True, callback=self.update_pitch_max)
+        self.pitch_min_slider = Slider(20, 0, 240, 20, 12, 119, 48, "Pitch Min", integer_only=True, callback=self.update_pitch_min)
+        self.pitch_max_slider = Slider(20, 0, 240, 20, 12, 119, 72, "Pitch Max", integer_only=True, callback=self.update_pitch_max)
         self.key_dropdown = Dropdown(20, 0, 240, 28, NOTE_NAMES, "C", "Key Selection", callback=self.update_pitch_key)
         self.scale_dropdown = Dropdown(20, 0, 240, 28, [
             "Chromatic", "Major", "Minor", "Pentatonic Major", "Pentatonic Minor", "Blues", 
@@ -640,11 +641,11 @@ class NoteSidebar:
         
         # 4. Channel & Orbit Section
         self.channel_slider = Slider(20, 0, 240, 20, 1, 16, 1, "MIDI Channel", integer_only=True, callback=self.update_note_channel)
-        self.mode_btn = Button(20, 0, 240, 28, "Orbit Mode: BPM %", COLOR_PRIMARY, (200, 170, 255), self.toggle_orbit_mode)
+        self.mode_btn = Button(20, 0, 240, 28, "Orbit Mode: BPM %", (39, 132, 174), (84, 147, 178), self.toggle_orbit_mode)
         self.speed_slider = Slider(20, 0, 240, 20, 10, 400, 100, "Orbit Speed", "%", integer_only=True, callback=self.update_note_speed)
         
         # 5. Delete Button
-        self.delete_btn = Button(20, 0, 240, 34, "DELETE NOTE", COLOR_RED, (255, 110, 110), self.trigger_delete)
+        self.delete_btn = Button(20, 0, 240, 34, "DELETE NOTE", (178, 60, 60), (178, 77, 77), self.trigger_delete)
         
     def toggle_pitch_range(self, checked):
         if self.selected_note:
@@ -1050,38 +1051,35 @@ def _note_spectrum_color(note):
     return pitch_to_color(base_pitch)
 
 
-def draw_clock_board(surface, center, r, is_spinning, angle, handles_list, notes, selected_note, fm):
+def draw_clock_board(surface, center, r, angle, handles_list, notes, selected_note, fm):
     """Draws the concentric orbit paths, Bezier control polygon, smooth Cubic Bezier curve, and orbiting notes."""
     x_c, y_c = center
     
     # 1. Thin concentric ORBITAL PATHS — tinted to each note's pitch colour,
-    #    very low opacity (~12%) so they don't compete with the notes themselves.
+    #    low opacity (~22%) so they read but don't compete with the notes themselves.
     for note in notes:
         visual_r = note.norm_r * r
         nc = _note_spectrum_color(note)
-        ring_color = tuple(int(COLOR_BG[c] + (nc[c] - COLOR_BG[c]) * 0.12) for c in range(3))
+        ring_color = tuple(int(COLOR_BG[c] + (nc[c] - COLOR_BG[c]) * 0.22) for c in range(3))
         pygame.draw.circle(surface, ring_color, center, int(visual_r), width=1)
 
     # 2. Glowing outer clock ring
     glow_surf = pygame.Surface((r * 2 + 20, r * 2 + 20), pygame.SRCALPHA)
     for w in range(12, 0, -1):
         alpha = int(35 / w)
-        pygame.draw.circle(glow_surf, (*COLOR_PINK, alpha), (r + 10, r + 10), r + (w // 2), width=2)
-    pygame.draw.circle(glow_surf, COLOR_PINK, (r + 10, r + 10), r, width=3)
+        pygame.draw.circle(glow_surf, (*COLOR_RING, alpha), (r + 10, r + 10), r + (w // 2), width=2)
+    pygame.draw.circle(glow_surf, COLOR_RING, (r + 10, r + 10), r, width=3)
     surface.blit(glow_surf, (x_c - r - 10, y_c - r - 10))
     
     # 3. Calculate rotated Bezier control handles (H0, P1, P2, P3) based on spinning sweep angle
     p0 = (0.0, 0.0)
     h1, h2, h3 = handles_list
     
-    if is_spinning:
-        cos_a = math.cos(angle)
-        sin_a = math.sin(angle)
-        p1 = (h1[0] * cos_a - h1[1] * sin_a, h1[0] * sin_a + h1[1] * cos_a)
-        p2 = (h2[0] * cos_a - h2[1] * sin_a, h2[0] * sin_a + h2[1] * cos_a)
-        p3 = (h3[0] * cos_a - h3[1] * sin_a, h3[0] * sin_a + h3[1] * cos_a)
-    else:
-        p1, p2, p3 = h1, h2, h3
+    cos_a = math.cos(angle)
+    sin_a = math.sin(angle)
+    p1 = (h1[0] * cos_a - h1[1] * sin_a, h1[0] * sin_a + h1[1] * cos_a)
+    p2 = (h2[0] * cos_a - h2[1] * sin_a, h2[0] * sin_a + h2[1] * cos_a)
+    p3 = (h3[0] * cos_a - h3[1] * sin_a, h3[0] * sin_a + h3[1] * cos_a)
         
     # Map coordinates to absolute screen positions
     ap0 = center
@@ -1104,16 +1102,16 @@ def draw_clock_board(surface, center, r, is_spinning, angle, handles_list, notes
         bezier_points.append((x_c + bx, y_c + by))
         
     if len(bezier_points) >= 2:
-        # KIRLIAN AESTHETIC: High-voltage coronal sleeve + core bright spark!
-        # Draw thick electric purple corona outer layer
-        pygame.draw.lines(surface, COLOR_PRIMARY, False, bezier_points, width=6)
-        # Draw bright white thin spark inner core
-        pygame.draw.lines(surface, COLOR_WHITE, False, bezier_points, width=2)
+        # Sweep arm: single electric-blue line at 50% opacity, half the old thickness.
+        # Drawn on an alpha layer so the 50% opacity blends over whatever is beneath.
+        line_surf = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+        pygame.draw.lines(line_surf, (*COLOR_RING, 128), False, bezier_points, width=3)
+        surface.blit(line_surf, (0, 0))
         
     # 6. Interactive handles (glowing anchor dots) for control points
     for p_i in [ap1, ap2, ap3]:
-        # Glowing pinkish halo
-        pygame.draw.circle(surface, COLOR_PINK, p_i, 8, width=2)
+        # Glowing blue halo with a white core
+        pygame.draw.circle(surface, COLOR_RING, p_i, 8, width=2)
         pygame.draw.circle(surface, COLOR_WHITE, p_i, 4)
 
     # 7. Orbiting Planet Notes Rendering with multi-layered high-voltage Kirlian auric coronas!

@@ -97,7 +97,7 @@ class Note:
         self.y = y_rel
         
         # Visualz
-        self.radius = 20
+        self.radius = 21        # ~5% larger than the original 20
         self.flash_intensity = 0.0
         self.is_dragging = False
         
@@ -146,8 +146,8 @@ class Sequencer:
             [0.0, -200.0]   # H3 (Outer Anchor Point)
         ]
         
-        self.is_line_spinning = False       # Line starts stationary (does not spin)
-        self.line_spin_direction = 1        # 1: Clockwise, -1: Counter-Clockwise
+        self.spin_speed = 0.0               # 0-100: 0 = stopped, 100 = full sweep rate
+        self.line_spin_direction = 1        # 1: Clockwise, -1: Counter-Clockwise (REV)
         self.sweep_angle = 0.0              # Line spin/sweep angle (radians)
         self.prev_sweep_angle = 0.0
         self.last_tick_time = 0.0
@@ -227,20 +227,15 @@ class Sequencer:
         h2 = self.handles[1]
         h3 = self.handles[2]
         
-        # If line spinning is active, we rotate all control handles!
-        if self.is_line_spinning:
-            if ang is None:
-                ang = self.sweep_angle
-            cos_a = math.cos(ang)
-            sin_a = math.sin(ang)
-            
-            p1 = (h1[0] * cos_a - h1[1] * sin_a, h1[0] * sin_a + h1[1] * cos_a)
-            p2 = (h2[0] * cos_a - h2[1] * sin_a, h2[0] * sin_a + h2[1] * cos_a)
-            p3 = (h3[0] * cos_a - h3[1] * sin_a, h3[0] * sin_a + h3[1] * cos_a)
-        else:
-            p1 = (h1[0], h1[1])
-            p2 = (h2[0], h2[1])
-            p3 = (h3[0], h3[1])
+        # Rotate all control handles by the current sweep angle (identity at angle 0)
+        if ang is None:
+            ang = self.sweep_angle
+        cos_a = math.cos(ang)
+        sin_a = math.sin(ang)
+
+        p1 = (h1[0] * cos_a - h1[1] * sin_a, h1[0] * sin_a + h1[1] * cos_a)
+        p2 = (h2[0] * cos_a - h2[1] * sin_a, h2[0] * sin_a + h2[1] * cos_a)
+        p3 = (h3[0] * cos_a - h3[1] * sin_a, h3[0] * sin_a + h3[1] * cos_a)
             
         points = []
         steps = 100
@@ -294,11 +289,12 @@ class Sequencer:
         dt = now - self.last_tick_time
         self.last_tick_time = now
 
-        # 1. Update Line Sweep angle if spinning is enabled
+        # 1. Update Line Sweep angle, scaled by the 0-100 spin speed (0 = frozen in place)
         omega_base = (math.pi * self.bpm) / 120.0  # Base rotation speed (1 full orbit = 4 beats)
-        if self.is_line_spinning:
-            self.prev_sweep_angle = self.sweep_angle
-            self.sweep_angle = (self.sweep_angle + self.line_spin_direction * omega_base * dt) % (2 * math.pi)
+        self.prev_sweep_angle = self.sweep_angle
+        spin_factor = self.spin_speed / 100.0
+        if spin_factor > 0.0:
+            self.sweep_angle = (self.sweep_angle + self.line_spin_direction * omega_base * spin_factor * dt) % (2 * math.pi)
             
         # 2. Evaluate current and previous Bezier spline points once per frame
         bezier_points_curr = self.get_bezier_points(self.sweep_angle)
@@ -383,7 +379,7 @@ class Sequencer:
         import json
         data = {
             "bpm": self.bpm,
-            "is_line_spinning": self.is_line_spinning,
+            "spin_speed": self.spin_speed,
             "line_spin_direction": self.line_spin_direction,
             "handles": self.handles,
             "notes": [
@@ -421,7 +417,11 @@ class Sequencer:
             data = json.load(f)
             
         self.bpm = data.get("bpm", 120)
-        self.is_line_spinning = data.get("is_line_spinning", False)
+        if "spin_speed" in data:
+            self.spin_speed = data.get("spin_speed", 0.0)
+        else:
+            # Back-compat: older sessions stored a boolean on/off toggle
+            self.spin_speed = 100.0 if data.get("is_line_spinning", False) else 0.0
         self.line_spin_direction = data.get("line_spin_direction", 1)
         self.handles = data.get("handles", self.handles)
         
