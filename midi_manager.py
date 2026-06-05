@@ -9,9 +9,17 @@ class MidiManager:
         self.pending_note_offs = []           # List of dicts: {'note': int, 'channel': int, 'time': float}
         self.available_ports = []
         self.logs = []
-        
+
+        # MIDI clock input (sync slave): listens for clock + transport from a DAW
+        self.in_port = None
+        self.in_port_name = None
+        self.available_in_ports = []
+        self.clock_bpm = None                 # Smoothed BPM derived from incoming clock, or None
+        self._clock_times = []                # Recent clock-pulse timestamps (one quarter = 24)
+
         self.log("MIDI Manager initialized.")
         self.refresh_ports()
+        self.refresh_input_ports()
         self.open_default_port()
 
     def log(self, msg):
@@ -35,6 +43,83 @@ class MidiManager:
         except Exception as e:
             self.log(f"Error scanning ports: {e}")
             self.available_ports = []
+
+    def refresh_input_ports(self):
+        """Scan system for available MIDI *input* ports (for clock sync)."""
+        try:
+            raw = mido.get_input_names()
+            seen = set()
+            self.available_in_ports = []
+            for p in raw:
+                if p not in seen:
+                    seen.add(p)
+                    self.available_in_ports.append(p)
+            names = ", ".join(self.available_in_ports) if self.available_in_ports else "none"
+            self.log(f"Input ports ({len(self.available_in_ports)}): {names}")
+        except Exception as e:
+            self.log(f"Error scanning input ports: {e}")
+            self.available_in_ports = []
+
+    def open_input_port(self, name):
+        """Open a MIDI input port by name to receive clock/transport. Closes previous first."""
+        if self.in_port:
+            try:
+                self.in_port.close()
+            except Exception:
+                pass
+        self.in_port = None
+        self.in_port_name = None
+        self.clock_bpm = None
+        self._clock_times = []
+
+        if not name or name == "No MIDI Inputs":
+            self.log("Cleared MIDI clock input.")
+            return False
+        try:
+            self.in_port = mido.open_input(name)
+            self.in_port_name = name
+            self.log(f"Opened clock input port: {name}")
+            return True
+        except Exception as e:
+            self.log(f"Open input failed for '{name}': {e}")
+            self.in_port = None
+            self.in_port_name = None
+            return False
+
+    def poll_sync(self):
+        """Drain pending MIDI input messages. Updates self.clock_bpm from clock pulses
+        and returns transport events: {'start','continue','stop'} as booleans."""
+        events = {'start': False, 'continue': False, 'stop': False}
+        if not self.in_port:
+            return events
+        try:
+            pending = list(self.in_port.iter_pending())
+        except Exception as e:
+            self.log(f"Input poll error: {e}")
+            return events
+
+        now = time.time()
+        for msg in pending:
+            if msg.type == 'clock':
+                self._clock_times.append(now)
+                if len(self._clock_times) > 24:           # keep ~one quarter note of pulses
+                    self._clock_times.pop(0)
+                if len(self._clock_times) >= 6:           # enough to estimate tempo
+                    span = self._clock_times[-1] - self._clock_times[0]
+                    ticks = len(self._clock_times) - 1
+                    if span > 0:
+                        bpm = 60.0 / ((span / ticks) * 24.0)
+                        if 20.0 <= bpm <= 1000.0:
+                            # one-pole smoothing to tame jitter
+                            self.clock_bpm = bpm if self.clock_bpm is None else (self.clock_bpm * 0.8 + bpm * 0.2)
+            elif msg.type == 'start':
+                events['start'] = True
+                self._clock_times = []
+            elif msg.type == 'continue':
+                events['continue'] = True
+            elif msg.type == 'stop':
+                events['stop'] = True
+        return events
 
     def open_default_port(self):
         """Attempt to open the first available port, preferring the Microsoft GS Synth on Windows."""
@@ -161,7 +246,7 @@ class MidiManager:
                 pass
 
     def close(self):
-        """Panic and safely close the MIDI port."""
+        """Panic and safely close the MIDI ports."""
         self.panic()
         if self.port:
             try:
@@ -171,3 +256,10 @@ class MidiManager:
                 print(f"Error closing MIDI port: {e}")
             self.port = None
             self.port_name = None
+        if self.in_port:
+            try:
+                self.in_port.close()
+            except Exception:
+                pass
+            self.in_port = None
+            self.in_port_name = None

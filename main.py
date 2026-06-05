@@ -58,6 +58,7 @@ def main():
     dragged_handle_idx = None
     is_fullscreen = False
     show_debug = False
+    sync_enabled = False        # MIDI clock sync (follow external transport)
     
     # Dynamic Callback for sidebar deletion
     def delete_active_note(note):
@@ -68,18 +69,24 @@ def main():
     sidebar = NoteSidebar(WIDTH, HEIGHT, delete_active_note)
     
     # Define control bar callback actions
+    def set_play_visual(playing):
+        if playing:
+            play_btn.text = "PAUSE"
+            play_btn.color = COLOR_ORANGE
+            play_btn.hover_color = (255, 205, 150)
+        else:
+            play_btn.text = "PLAY"
+            play_btn.color = COLOR_EMERALD
+            play_btn.hover_color = (130, 255, 160)
+
     def toggle_play():
         if sequencer.is_playing:
             sequencer.stop()
             midi_manager.panic()
-            play_btn.text = "PLAY"
-            play_btn.color = COLOR_EMERALD
-            play_btn.hover_color = (130, 255, 160)
+            set_play_visual(False)
         else:
             sequencer.start()
-            play_btn.text = "PAUSE"
-            play_btn.color = COLOR_ORANGE
-            play_btn.hover_color = (255, 205, 150)
+            set_play_visual(True)
             
     def clear_sequencer():
         nonlocal selected_note
@@ -160,6 +167,26 @@ def main():
 
     def select_midi_port(port_name):
         midi_manager.open_port(port_name)
+
+    def select_midi_input(port_name):
+        midi_manager.open_input_port(port_name)
+
+    def toggle_sync():
+        nonlocal sync_enabled
+        sync_enabled = not sync_enabled
+        if sync_enabled:
+            sync_btn.color = COLOR_EMERALD
+            sync_btn.hover_color = (130, 255, 160)
+            sync_btn.text_color = (12, 16, 22)
+            if midi_manager.in_port:
+                midi_manager.status_message = "MIDI Sync ON"
+            else:
+                midi_manager.status_message = "Sync ON - pick clock input (press D)"
+        else:
+            sync_btn.color = COLOR_MUTED
+            sync_btn.hover_color = (160, 170, 180)
+            sync_btn.text_color = COLOR_TEXT
+            midi_manager.status_message = "MIDI Sync OFF"
         
     # Build Top Control Bar widgets
     midi_ports = midi_manager.available_ports if midi_manager.available_ports else ["No MIDI Ports"]
@@ -179,15 +206,21 @@ def main():
     
     reset_btn = Button(140, 60, 55, 28, "RESET", COLOR_MUTED, (160, 170, 180), reset_orbits_and_sweep)
     
-    bpm_slider = Slider(205, 65, 70, 18, 1, 1000, sequencer.bpm, "BPM", integer_only=True, callback=change_bpm)
+    bpm_slider = Slider(205, 65, 64, 18, 1, 1000, sequencer.bpm, "BPM", integer_only=True, callback=change_bpm)
 
-    spin_slider = Slider(295, 65, 60, 18, 0, 100, sequencer.spin_speed, "Spin", integer_only=True, callback=change_spin)
+    spin_slider = Slider(283, 65, 50, 18, 0, 100, sequencer.spin_speed, "Spin", integer_only=True, callback=change_spin)
 
-    rev_btn = Button(365, 60, 55, 28, "REV", COLOR_MUTED, (160, 170, 180), toggle_reverse)
+    rev_btn = Button(343, 60, 44, 28, "REV", COLOR_MUTED, (160, 170, 180), toggle_reverse)
 
-    straight_btn = Button(425, 60, 50, 28, "STRT", COLOR_MUTED, (160, 170, 180), straighten_spline_handles)
+    straight_btn = Button(391, 60, 44, 28, "STRT", COLOR_MUTED, (160, 170, 180), straighten_spline_handles)
 
-    top_bar_widgets = [play_btn, clear_btn, reset_btn, bpm_slider, spin_slider, rev_btn, straight_btn, save_btn, load_btn, midi_dropdown]
+    sync_btn = Button(439, 60, 60, 28, "SYNC", COLOR_MUTED, (160, 170, 180), toggle_sync)
+
+    # MIDI clock-input picker — lives in the Diagnostics (D) overlay, not the top bar
+    midi_in_ports = midi_manager.available_in_ports if midi_manager.available_in_ports else ["No MIDI Inputs"]
+    midi_in_dropdown = Dropdown(30, 232, 280, 28, midi_in_ports, "No MIDI Inputs", "MIDI Clock Input (sync)", callback=select_midi_input)
+
+    top_bar_widgets = [play_btn, clear_btn, reset_btn, bpm_slider, spin_slider, rev_btn, straight_btn, sync_btn, save_btn, load_btn, midi_dropdown]
     
     # Primary application loop
     running = True
@@ -217,6 +250,10 @@ def main():
                 sidebar.set_note(selected_note)
                 continue
                 
+            # A0. MIDI clock-input dropdown — only interactive while the D panel is open
+            if show_debug and midi_in_dropdown.handle_event(event):
+                continue
+
             # A. Check dropdown open logic FIRST to capture clicks on its expanded options overlay
             if midi_dropdown.handle_event(event):
                 continue
@@ -368,11 +405,42 @@ def main():
                     sidebar.set_note(selected_note)
                 elif event.key == pygame.K_d:
                     show_debug = not show_debug
+                    if show_debug:
+                        midi_manager.refresh_input_ports()
+                        ports = midi_manager.available_in_ports
+                        midi_in_dropdown.options = ports if ports else ["No MIDI Inputs"]
+                        if not ports:
+                            midi_in_dropdown.current_option = "No MIDI Inputs"
+                        elif midi_in_dropdown.current_option not in ports:
+                            midi_in_dropdown.current_option = "Click to choose..."
+                    else:
+                        midi_in_dropdown.is_open = False
                     
         # 2. Update states and clocks
+
+        # MIDI clock sync (slave): follow an external DAW's transport + tempo
+        if midi_manager.in_port:
+            sync_ev = midi_manager.poll_sync()
+            if sync_enabled:
+                if sync_ev['start']:
+                    sequencer.reset_orbits()      # re-align pattern to the top
+                    sequencer.stop()
+                    sequencer.start()
+                    set_play_visual(True)
+                elif sync_ev['continue']:
+                    if not sequencer.is_playing:
+                        sequencer.start()
+                        set_play_visual(True)
+                if sync_ev['stop']:
+                    sequencer.stop()
+                    midi_manager.panic()
+                    set_play_visual(False)
+                if midi_manager.clock_bpm and not bpm_slider.is_editing:
+                    bpm_slider.set_value(int(round(midi_manager.clock_bpm)))
+
         for note in sequencer.notes:
             note.sync_cartesian(CLOCK_RADIUS)
-            
+
         sequencer.update(midi_manager)
         midi_manager.update()
         sidebar.update()
@@ -405,43 +473,54 @@ def main():
             screen.blit(debug_overlay, (0, 0))
             
             pygame.draw.line(screen, COLOR_BORDER, (clock_area_w, 0), (clock_area_w, HEIGHT), width=2)
-            
-            log_title = fm.render("SYSTEM DIAGNOSTICS & MIDI LOGGER", 'large', COLOR_PRIMARY)
-            screen.blit(log_title, (30, 30))
-            
-            hint_txt1 = fm.render("exclusive-use locks: Close other DAWs/synthesizers on Windows if port fails.", 'tiny', COLOR_MUTED)
-            screen.blit(hint_txt1, (30, 60))
-            
-            hint_txt2 = fm.render("MIDI concepts: This app is a transmitter (MIDI OUTPUT). It only lists outputs.", 'tiny', COLOR_MUTED)
-            screen.blit(hint_txt2, (30, 78))
-            
-            hint_txt3 = fm.render("Physical keyboards (Inputs) do not expose outputs and will not appear.", 'tiny', COLOR_MUTED)
-            screen.blit(hint_txt3, (30, 96))
-            
-            hint_txt4 = fm.render("Setup: Install loopMIDI (virtual cable) -> select in our app -> enable in DAW!", 'tiny', COLOR_EMERALD)
-            screen.blit(hint_txt4, (30, 114))
-            
-            info_txt = fm.render(f"Device status: {midi_manager.status_message} | Active: {midi_manager.port_name}", 'small', COLOR_TEXT)
-            screen.blit(info_txt, (30, 140))
-            
-            log_hdr = fm.render("TRANSFERRED PACKETS (LAST 13):", 'small', COLOR_PRIMARY)
-            screen.blit(log_hdr, (30, 175))
-            
-            y_offset = 200
+
+            # Content starts below the top control bar (y<=105) so nothing is hidden behind it
+            log_title = fm.render("MIDI DIAGNOSTICS & SYNC", 'large', COLOR_PRIMARY)
+            screen.blit(log_title, (30, 116))
+
+            hint = fm.render("loopMIDI virtual port -> pick it as Clock Input below -> tick its Sync in your DAW's MIDI Output.", 'tiny', COLOR_EMERALD)
+            screen.blit(hint, (30, 146))
+
+            info_txt = fm.render(f"MIDI Out: {midi_manager.status_message} | {midi_manager.port_name}", 'small', COLOR_TEXT)
+            screen.blit(info_txt, (30, 166))
+
+            # The key diagnostic: list the actual detected input port NAMES
+            ins = midi_manager.available_in_ports
+            ins_str = ", ".join(ins) if ins else "none detected"
+            det = fm.render(f"Detected MIDI inputs: {ins_str}", 'small', COLOR_TEXT if ins else COLOR_MUTED)
+            screen.blit(det, (30, 188))
+
+            # Clock-input picker (label auto-draws above the box; options drawn last, on top)
+            midi_in_dropdown.draw(screen, fm)
+
+            sync_state = "ON" if sync_enabled else "OFF"
+            sync_col = COLOR_EMERALD if sync_enabled else COLOR_MUTED
+            in_name = midi_manager.in_port_name if midi_manager.in_port_name else "(none)"
+            bpm_in = f"{midi_manager.clock_bpm:.1f}" if midi_manager.clock_bpm else "--"
+            sync_txt = fm.render(f"Sync: {sync_state}   In: {in_name}   Incoming clock: {bpm_in} BPM", 'small', sync_col)
+            screen.blit(sync_txt, (30, 272))
+
+            log_hdr = fm.render("EVENT LOG (LAST 9):", 'small', COLOR_PRIMARY)
+            screen.blit(log_hdr, (30, 300))
+
+            y_offset = 324
             if not midi_manager.logs:
-                empty_surf = fm.render("No MIDI logs recorded. Press PLAY and trigger a note.", 'small', COLOR_MUTED)
+                empty_surf = fm.render("No log entries yet.", 'small', COLOR_MUTED)
                 screen.blit(empty_surf, (30, y_offset))
             else:
-                for entry in reversed(midi_manager.logs[-13:]):
+                for entry in reversed(midi_manager.logs[-9:]):
                     log_color = COLOR_EMERALD if "Sent" in entry else (COLOR_PRIMARY if "Opened" in entry else COLOR_MUTED)
                     if "Error" in entry or "Failed" in entry:
                         log_color = COLOR_RED
                     entry_surf = fm.render(entry, 'small', log_color)
                     screen.blit(entry_surf, (30, y_offset))
                     y_offset += 24
-                    
-            help_hint = fm.render("Press 'D' key to close debug diagnostic log panel", 'tiny', COLOR_MUTED)
+
+            help_hint = fm.render("Press 'D' to close", 'tiny', COLOR_MUTED)
             screen.blit(help_hint, (30, HEIGHT - 30))
+
+            # Draw the input dropdown's expanded options on top of everything else in the panel
+            midi_in_dropdown.draw_options(screen, fm)
             
         # C. Draw top control bar background (solid bar separating controls from clock)
         pygame.draw.rect(screen, (22, 23, 31), (0, 0, WIDTH, 105))
