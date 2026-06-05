@@ -87,7 +87,8 @@ class Slider:
         # Manual value-entry (double-click the readout to type a value)
         self.is_editing = False
         self.edit_text = ""
-        self.value_rect = pygame.Rect(0, 0, 0, 0)   # readout hit-area, set in draw()
+        self.select_all = False                      # whole value highlighted -> typing replaces it
+        self.value_rect = pygame.Rect(0, 0, 0, 0)    # readout hit-area, set in draw()
         self.last_value_click = 0                    # ms timestamp for double-click detection
 
         self.update_handle_x()
@@ -101,6 +102,7 @@ class Slider:
             self.edit_text = str(int(round(self.current_val)))
         else:
             self.edit_text = f"{self.current_val:.2f}".rstrip('0').rstrip('.')
+        self.select_all = True          # opens with the value "selected" so typing replaces it
         Slider.active_editor = self
 
     def commit_edit(self):
@@ -141,18 +143,28 @@ class Slider:
         # --- Manual text-entry mode takes priority -------------------------
         if self.is_editing:
             if event.type == pygame.KEYDOWN:
-                if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                if (pygame.key.get_mods() & pygame.KMOD_CTRL) and event.key == pygame.K_a:
+                    self.select_all = True          # Ctrl+A re-selects all
+                elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                     self.commit_edit()
                 elif event.key == pygame.K_ESCAPE:
                     self.cancel_edit()
                 elif event.key == pygame.K_BACKSPACE:
-                    self.edit_text = self.edit_text[:-1]
+                    if self.select_all:
+                        self.edit_text = ""         # selection deleted in one stroke
+                        self.select_all = False
+                    else:
+                        self.edit_text = self.edit_text[:-1]
                 elif event.unicode and event.unicode in "0123456789.-":
+                    if self.select_all:
+                        self.edit_text = ""         # typing over the selection replaces it
+                        self.select_all = False
                     self.edit_text += event.unicode
                 return True  # swallow ALL keystrokes so global hotkeys don't fire
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if self.value_rect.collidepoint(event.pos):
-                    return True          # clicking inside the field keeps editing
+                    self.select_all = True          # clicking in the field re-selects all
+                    return True
                 self.commit_edit()       # clicking elsewhere commits...
                 return False             # ...and lets that click act normally
             return False
@@ -224,10 +236,17 @@ class Slider:
             pygame.draw.rect(surface, (38, 40, 56), box, border_radius=3)
             pygame.draw.rect(surface, COLOR_PRIMARY, box, width=1, border_radius=3)
 
-            surface.blit(txt_surf, (txt_x, val_cy - txt_surf.get_height() // 2))
-            if (pygame.time.get_ticks() // 500) % 2 == 0:     # blinking caret, fixed position
-                cx = right + 2
-                pygame.draw.line(surface, COLOR_WHITE, (cx, val_cy - val_h // 2 + 1), (cx, val_cy + val_h // 2 - 1), 1)
+            if self.select_all and self.edit_text:
+                # Whole value highlighted — typing or Backspace replaces it
+                sel = pygame.Rect(txt_x - 2, val_cy - val_h // 2 - 1, txt_surf.get_width() + 4, val_h + 2)
+                pygame.draw.rect(surface, COLOR_PRIMARY, sel, border_radius=2)
+                hi = fm.render(self.edit_text, 'small', (12, 16, 22))
+                surface.blit(hi, (txt_x, val_cy - hi.get_height() // 2))
+            else:
+                surface.blit(txt_surf, (txt_x, val_cy - txt_surf.get_height() // 2))
+                if (pygame.time.get_ticks() // 500) % 2 == 0:     # blinking caret, fixed position
+                    cx = right + 2
+                    pygame.draw.line(surface, COLOR_WHITE, (cx, val_cy - val_h // 2 + 1), (cx, val_cy + val_h // 2 - 1), 1)
             self.value_rect = box
         else:
             vx = self.rect.x + self.rect.width - val_surf.get_width()
